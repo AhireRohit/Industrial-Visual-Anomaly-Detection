@@ -1,4 +1,4 @@
-"""Industrial Visual Anomaly Detection dashboard (PatchCore V1 / Metal Nut).
+"""Industrial Visual Anomaly Detection dashboard (PatchCore / 3 MVTec AD categories).
 
 Run from the project directory with:
     python -m streamlit run dashboard.py
@@ -32,12 +32,12 @@ from inspection_history import (
 
 # ---------------------------- Configuration ----------------------------
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "outputs" / "patchcore" / "metal_nut"
-CHECKPOINT = MODEL_DIR / "model.ckpt"
-IMAGE_THRESHOLD_FILE = MODEL_DIR / "threshold.json"
-PIXEL_THRESHOLD_FILE = MODEL_DIR / "pixel_threshold.json"
-MODEL_VERSION = "PatchCore V1"
-CATEGORY = "metal_nut"
+CATEGORY_NAMES = {
+    "metal_nut": "Metal Nut",
+    "cable": "Cable",
+    "tile": "Tile",
+}
+MODEL_VERSION = "PatchCore V1"  # Same backbone and coreset configuration.
 
 st.set_page_config(
     page_title="Industrial AI Inspection",
@@ -45,15 +45,36 @@ st.set_page_config(
     layout="wide",
 )
 
+# Switching categories changes the checkpoint AND both frozen thresholds.
+with st.sidebar:
+    st.header("Inspection Settings")
+    CATEGORY = st.selectbox(
+        "Product category",
+        options=list(CATEGORY_NAMES),
+        format_func=lambda value: CATEGORY_NAMES[value],
+        key="inspection_category",
+    )
+    st.caption("Use images of the selected product type. Each category has a separate trained model and validation-calibrated thresholds.")
+
+MODEL_DIR = BASE_DIR / "outputs" / "patchcore" / CATEGORY
+CHECKPOINT = MODEL_DIR / "model.ckpt"
+IMAGE_THRESHOLD_FILE = MODEL_DIR / "threshold.json"
+PIXEL_THRESHOLD_FILE = MODEL_DIR / "pixel_threshold.json"
+
 for required in (CHECKPOINT, IMAGE_THRESHOLD_FILE, PIXEL_THRESHOLD_FILE):
     if not required.is_file():
-        st.error(f"Missing required model file: {required}")
+        st.error(f"Missing required model file for {CATEGORY_NAMES[CATEGORY]}: {required}")
+        st.info("Train and calibrate the selected category first, or choose a model with available files.")
         st.stop()
 
 with IMAGE_THRESHOLD_FILE.open(encoding="utf-8") as file:
     IMAGE_THRESHOLD = float(json.load(file)["image_threshold"])
 with PIXEL_THRESHOLD_FILE.open(encoding="utf-8") as file:
     PIXEL_THRESHOLD = float(json.load(file)["pixel_threshold"])
+
+with st.sidebar:
+    st.caption(f"Image threshold: {IMAGE_THRESHOLD:.4f}")
+    st.caption(f"Pixel threshold: {PIXEL_THRESHOLD:.4f}")
 
 
 # -------------------------- Image / I/O helpers ------------------------
@@ -66,6 +87,7 @@ def read_image(image_bytes: bytes) -> Image.Image:
 def upload_signature(files) -> str:
     """Invalidate old results whenever files, names, or order change."""
     digest = hashlib.sha256()
+    digest.update(CATEGORY.encode("utf-8"))
     for uploaded in files:
         data = uploaded.getvalue()
         digest.update(uploaded.name.encode("utf-8"))
@@ -228,7 +250,7 @@ def show_inspection(entry: dict, image_bytes: bytes):
     with st.expander("Inspection details"):
         st.write(f'**Source:** {entry["filename"]}')
         st.write(f"**Model:** {MODEL_VERSION}")
-        st.write(f"**Category:** {CATEGORY}")
+        st.write(f"**Category:** {CATEGORY_NAMES[CATEGORY]}")
         st.write(f"**Pixel threshold:** {PIXEL_THRESHOLD:.6f}")
         st.write(f'**Inspected at (UTC):** {entry["timestamp"]}')
 
@@ -270,7 +292,7 @@ def create_exports(entries, total_seconds: float):
 
 # ---------------------------------- UI ---------------------------------
 st.title("Industrial Visual Anomaly Detection")
-st.caption("Industrial inspection | PatchCore V1 | Metal Nut")
+st.caption(f"Industrial inspection | {MODEL_VERSION} | {CATEGORY_NAMES[CATEGORY]}")
 
 # SQLite stores inspection metadata between app restarts.
 try:
@@ -286,9 +308,9 @@ single_tab, batch_tab, history_tab = st.tabs([
 with single_tab:
     st.subheader("Inspect a Product")
     uploaded = st.file_uploader(
-        "Upload one metal nut image",
+        f"Upload one {CATEGORY_NAMES[CATEGORY].lower()} image",
         type=["png", "jpg", "jpeg", "bmp"],
-        key="single_file",
+        key=f"single_file_{CATEGORY}",
     )
     if uploaded is not None:
         uploaded_bytes = uploaded.getvalue()
@@ -320,6 +342,7 @@ with single_tab:
                         image_threshold=IMAGE_THRESHOLD,
                         pixel_threshold=PIXEL_THRESHOLD,
                         model_version=MODEL_VERSION,
+                        category=CATEGORY,
                     )
                     st.session_state["single_result"]["saved_run_id"] = run_id
                 except Exception as db_error:
@@ -351,10 +374,10 @@ with single_tab:
 with batch_tab:
     st.subheader("Inspect Multiple Products")
     files = st.file_uploader(
-        "Upload multiple metal nut images",
+        f"Upload multiple {CATEGORY_NAMES[CATEGORY].lower()} images",
         type=["png", "jpg", "jpeg", "bmp"],
         accept_multiple_files=True,
-        key="batch_files",
+        key=f"batch_files_{CATEGORY}",
     )
     if files:
         st.write(f"Selected images: **{len(files)}**")
@@ -379,6 +402,7 @@ with batch_tab:
                         image_threshold=IMAGE_THRESHOLD,
                         pixel_threshold=PIXEL_THRESHOLD,
                         model_version=MODEL_VERSION,
+                        category=CATEGORY,
                     )
                     st.session_state["batch_result"]["saved_run_id"] = run_id
                 except Exception as db_error:
@@ -474,6 +498,17 @@ with history_tab:
     if decision_filter != "All":
         history_rows = [
             row for row in history_rows if row["decision"] == decision_filter
+        ]
+
+    category_filter = st.selectbox(
+        "Filter by product category",
+        options=["All", *CATEGORY_NAMES],
+        format_func=lambda value: "All" if value == "All" else CATEGORY_NAMES[value],
+        key="history_category_filter",
+    )
+    if category_filter != "All":
+        history_rows = [
+            row for row in history_rows if row["category"] == category_filter
         ]
 
     if not history_rows:
