@@ -1,164 +1,187 @@
-# Industrial Visual Anomaly Detection and Defect Localisation
+# Industrial Visual Anomaly Detection & Defect Localisation
 
-An industrial visual-inspection system that learns from defect-free product images to detect anomalies and localise suspicious regions.
+**Multi-category industrial visual inspection using PatchCore, PyTorch, Anomalib, Streamlit, and SQLite.** The system learns normal product appearance from defect-free images, then detects anomalous products and highlights suspicious regions with heatmaps and binary masks.
 
-Built using **PyTorch, Anomalib, PatchCore, OpenCV, Streamlit and SQLite**.
+**Categories:** Metal Nut · Cable · Tile  
+**Benchmark:** MVTec AD · **382 held-out test images** across the three categories  
+**Application:** Single-image inspection · Batch inspection · Category selection · Persistent inspection history
 
-## Overview
+> **Research / portfolio demonstration.** Not validated for deployment in production quality-control systems.
 
-Industrial inspection systems often face a shortage of labelled defective samples. This project investigates whether models trained exclusively on healthy products can identify defects such as scratches, discoloration and structural damage.
+## What it does
 
-The project compares two approaches:
+- Fits a separate **PatchCore (ResNet-18)** anomaly detector per product category using healthy training images only.
+- Calibrates **image-level** and **pixel-level** anomaly thresholds from held-out healthy validation images, separately for each category.
+- Classifies uploaded images as **NORMAL** or **ANOMALY**, with an anomaly score, heatmap overlay, and binary localisation mask.
+- Supports batch inspections, CSV reports, PNG/ZIP mask exports, end-to-end timing, and SQLite inspection history.
+- Compares PatchCore with a convolutional autoencoder baseline on Metal Nut.
 
-- **PatchCore:** Extracts pretrained visual features and compares image patches against a memory bank of healthy examples.
-- **Convolutional Autoencoder:** Learns to reconstruct healthy products and uses reconstruction errors as anomaly scores.
+## Benchmark results
 
-An interactive Streamlit dashboard supports individual and batch inspection, anomaly visualisation, report export and persistent inspection history.
+Evaluations use the original **MVTec AD test partitions**. Thresholds were fixed using healthy validation images before testing; no test labels were used to set thresholds. Higher scores are better except for false-positive rate.
 
-## Results
+### Image-level anomaly detection
 
-Experiments were conducted on the Metal Nut category of MVTec AD.
-
-### Image-level detection
-
-| Metric | PatchCore V1 | PatchCore V2 | Autoencoder |
+| Metric | Metal Nut | Cable | Tile |
 |---|---:|---:|---:|
-| Accuracy | 96.52% | 95.65% | 18.26% |
-| Defect recall | 96.77% | 98.92% | 2.15% |
-| Precision | 98.90% | 95.83% | 40.00% |
-| False-positive rate | 4.55% | 18.18% | 13.64% |
-| Image AUROC | 0.9897 | 0.9946 | 0.3099 |
+| Test images | 115 | 150 | 117 |
+| Accuracy | **96.52%** | 91.33% | 92.31% |
+| Precision | 98.90% | 94.38% | **100.00%** |
+| Defect recall | **96.77%** | 91.30% | 89.29% |
+| False-positive rate | 4.55% | 8.62% | **0.00%** |
+| **Image AUROC** | 0.9897 | 0.9732 | **0.9924** |
 
-### Pixel-level localisation
+![Image-level and pixel-level AUROC across three product categories](docs/figures/detection_auroc.png)
 
-| Metric | PatchCore V1 | PatchCore V2 | Autoencoder |
+### Pixel-level defect localisation
+
+IoU and Dice are **micro-averaged over all test-set pixels**, including healthy test images. Ground-truth masks were resized using nearest-neighbour interpolation to match prediction-map resolution.
+
+| Metric | Metal Nut | Cable | Tile |
 |---|---:|---:|---:|
-| Pixel AUROC | 0.9791 | — | 0.7444 |
-| Pixel recall | 93.58% | 96.61% | — |
-| Mask IoU | 63.23% | 62.85% | — |
-| Dice score | 77.47% | 77.19% | — |
+| **Pixel AUROC** | 0.9791 | **0.9799** | 0.9337 |
+| Pixel precision | **66.10%** | 42.30% | 38.69% |
+| Pixel recall | **93.58%** | 83.45% | 88.84% |
+| Pixel false-positive rate | 6.37% | **3.36%** | 10.66% |
+| **Mask IoU** | **0.6323** | 0.3902 | 0.3690 |
+| **Dice** | **0.7747** | 0.5614 | 0.5391 |
 
-IoU and Dice are micro-averaged across test pixels. Unreported measurements are marked with a dash.
+![Binary defect localisation: micro IoU and Dice](docs/figures/localization_overlap.png)
 
-**Key finding:** PatchCore considerably outperformed the reconstruction-based autoencoder. However, its predicted masks sometimes extend beyond the actual defective regions, particularly for small scratches and discolorations.
+The underlying metrics can be regenerated with:
 
-These results were obtained on one benchmark category. Subsequent experiments were exploratory and should not be interpreted as independent test-set validation.
+```powershell
+python scripts/generate_benchmark_charts.py
+```
 
-## Dataset
+This reads the JSON evaluation artifacts from `outputs/` and creates `docs/figures/benchmark_summary.csv` plus both PNG charts. Those evaluation artifacts are local and are intentionally excluded from Git; the generated summary CSV is included for reference.
 
-**MVTec AD — Metal Nut**
+### What the results show
 
-| Partition | Images |
-|---|---:|
-| Healthy training | 176 |
-| Healthy validation | 44 |
-| Benchmark test | 115 |
-| Defective test images | 93 |
-| Healthy test images | 22 |
+- **Detection is stronger than localisation.** All three image AUROCs exceed 0.97, but thresholded mask IoU drops to **0.3902** for Cable and **0.3690** for Tile.
+- **Cable:** `cable_swap` and `poke_insulation` have lower image-level recall (66.67% and 70.00%). Some `cable_swap` and `cut_outer_insulation` examples have particularly poor mask overlap.
+- **Tile:** The model detects all 17 crack test images at the image level, yet thin cracks are among its worst cases for mask IoU. `gray_stroke` has 62.50% image-level recall.
+- **Threshold calibration has limitations.** The 99th-percentile healthy-validation pixel threshold gives about 1% exceedance on validation pixels by construction, **not** a guaranteed 1% test pixel FPR. Tile's observed test pixel FPR is 10.66%.
 
-Healthy training samples were divided using a fixed random seed of 42.
+We preserve these frozen-threshold results as the benchmark baseline rather than retuning on evaluated test samples. Results are category-specific and do not establish performance on live factory camera feeds.
 
-Validation images were used to calibrate anomaly thresholds, while the benchmark test images were used for evaluation.
+## Data and experimental protocol
 
-The original dataset is available from [MVTec AD](https://www.mvtec.com/research-teaching/datasets/mvtec-ad). Its licence restricts usage to the permitted noncommercial purposes. Dataset images are not included in this repository.
+Dataset: [MVTec Anomaly Detection (MVTec AD)](https://www.mvtec.com/research-teaching/datasets/mvtec-ad). Check and follow the dataset's applicable licence before use. **Dataset images and ground-truth masks are not redistributed in this repository.**
 
-## Model Architecture
+| Category | Healthy train | Healthy validation | Test (good + defective) |
+|---|---:|---:|---|
+| Metal Nut | 176 | 44 | 115 (22 + 93) |
+| Cable | 179 | 45 | 150 (58 + 92) |
+| Tile | 184 | 46 | 117 (33 + 84) |
 
-### PatchCore
+Healthy training images were split **80/20 with seed 42**, using manifests in `configs/`. The MVTec AD test folders were not included in training or calibration.
 
-- Feature extractor: ResNet-18
-- Feature layers: `layer2`, `layer3`
-- Memory-bank coreset ratio: 0.1
-- Effective input resolution: 256 × 256
-- Training: Healthy images only
-- Inference: Nearest-neighbour anomaly scoring
+**Model configuration:** Anomalib PatchCore with pretrained `resnet18`, feature layers `layer2` and `layer3`, coreset sampling ratio `0.1`, and effective model input resolution **256 × 256** (the internal preprocessor overrides the 224 × 224 data-augmentation resize).
 
-PatchCore V1 uses fixed validation-calibrated thresholds:
+**Per-category frozen thresholds:**
 
-- Image threshold: `12.2499`
-- Pixel threshold: `10.4767`
+| Category | Image threshold (95th percentile) | Pixel threshold (99th percentile) |
+|---|---:|---:|
+| Metal Nut | 12.2499 | 10.4767 |
+| Cable | 15.1426 | 12.7657 |
+| Tile | 11.6998 | 9.6177 |
 
-### Convolutional Autoencoder
+These scores are model-specific anomaly distances, **not probabilities**, and must not be compared directly across categories.
 
-- Four convolutional encoder layers
-- Four transposed-convolution decoder layers
-- Parameters: 1,380,035
-- Training epochs: 30
-- Optimizer: Adam
-- Learning rate: 0.001
-- Loss: Mean Squared Error
+## Autoencoder baseline (Metal Nut)
 
-Two image scoring methods were evaluated: full-image reconstruction MSE and Top-1% pixel reconstruction MSE.
+We also trained a convolutional autoencoder with **1,380,035 parameters**, Adam (`lr=0.001`), MSE reconstruction loss, and 30 epochs on the healthy Metal Nut training split.
 
-## Inspection Dashboard
+| Metric | PatchCore V1 | Autoencoder (mean MSE) |
+|---|---:|---:|
+| Image AUROC | **0.9897** | 0.3099 |
+| Image accuracy | **96.52%** | 18.26% |
+| Defect recall | **96.77%** | 2.15% |
+| Pixel AUROC | **0.9791** | 0.7444 |
 
-The Streamlit application provides:
+The autoencoder often reconstructed defects too faithfully, making reconstruction error an ineffective image-level detector in this experiment. An exploratory PatchCore V2 was also evaluated on Metal Nut; V1 remains the application's default Metal Nut model because of its lower observed false-alarm rate. These exploratory comparisons are not independent, unobserved-test-set validation.
 
-- Single-image inspection
-- Batch-image inspection
-- Normal/anomaly classification
-- Anomaly scores and calibrated thresholds
-- Heatmaps and image overlays
-- Binary defect masks
-- CSV and PNG/ZIP export
-- End-to-end processing-time measurements
-- Persistent SQLite inspection history
+## Streamlit inspection application
 
-### Run the application
+Features include a **Metal Nut / Cable / Tile** category selector, individual and batch image uploads, anomaly scores, binary decisions, heatmaps, overlays, mask exports, report CSVs, timing measurements, and persistent SQLite history. Records store inspection metadata, not original image bytes or masks.
 
-After installing dependencies, preparing the dataset, fitting the model and generating calibration files:
+Launch from the project root after preparing the dataset, checkpoints, and calibration files:
 
-```bash
+```powershell
 python -m streamlit run dashboard.py
 ```
 
-The application will be available at `http://localhost:8501`.
+Open `http://localhost:8501` and choose a product category before uploading images.
 
-The project was developed on Windows with Python 3.12 and an NVIDIA RTX 3050 laptop GPU.
+> The trained checkpoints (`model.ckpt`) and threshold JSON files are not committed to Git. A fresh clone **cannot run inference immediately**; recreate the models using the scripts below or supply your own compatible trained artifacts.
 
-## Project Structure
+## Reproducing the experiments
 
-```text
-Anomaly detection/
-├── configs/
-│   └── metal_nut_split.json
-├── scripts/
-│   ├── create_split.py
-│   ├── prepare_data.py
-│   ├── train_patchcore.py
-│   ├── train_patchcore_v2.py
-│   ├── autoencoder.py
-│   ├── train_autoencoder.py
-│   ├── evaluate_patchcore.py
-│   ├── evaluate_masks.py
-│   └── ...
-├── app.py
-├── batch_app.py
-├── dashboard.py
-├── inspection_history.py
-├── datasets/                 # Not tracked by Git
-└── outputs/                  # Not tracked by Git
+Developed with **Python 3.12**, an **NVIDIA RTX 3050 Laptop GPU**, CUDA-enabled PyTorch, and Anomalib. The pinned `requirements.txt` targets the recorded CUDA 12.8 environment; different hardware may require a different PyTorch installation.
+
+```powershell
+# From the project root (Windows PowerShell)
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 ```
 
-Model checkpoints, datasets and inspection databases are generated locally and excluded from version control.
+Download the MVTec AD `metal_nut`, `cable`, and `tile` categories into `datasets/MVTecAD/<category>/`, preserving their `train/`, `test/`, and `ground_truth/` directories. These data files are not stored in Git.
 
-## Limitations
+For **Cable and Tile**, use the reusable scripts in this order:
 
-- Results currently cover only the Metal Nut category.
-- Small, low-contrast defects remain challenging.
-- Some segmentation masks overestimate the defective region.
-- Calibration on a limited healthy validation set does not guarantee the same false-positive rate in deployment.
-- Performance on independently photographed factory components has not been established.
+```powershell
+python scripts/create_multicategory_splits.py
+python scripts/prepare_multicategory_data.py
 
-## Planned Extensions
+# Repeat the following per category: cable, then tile
+python scripts/train_patchcore_multicategory.py --category cable
+python scripts/calibrate_multicategory_threshold.py --category cable
+python scripts/calibrate_multicategory_pixel_threshold.py --category cable
+python scripts/evaluate_patchcore_multicategory.py --category cable
+python scripts/evaluate_localization_multicategory.py --category cable
+```
 
-- Extend PatchCore to Cable and Tile.
-- Benchmark training-data efficiency.
-- Evaluate robustness to brightness, blur and compression.
-- Measure warm-model inference latency and GPU memory usage.
-- Add automated tests and Docker deployment.
-- Produce a demonstration video and benchmark report.
+Repeat the last five commands with `--category tile`. For **Metal Nut**, use the existing `create_split.py`, `prepare_data.py`, `train_patchcore.py`, `calibrate_threshold.py`, `calibrate_pixel_threshold.py`, `evaluate_patchcore.py`, `evaluate_localization.py`, and `evaluate_masks.py` scripts. Run scripts from the repository root.
 
-## Intended Use
+Chart generation additionally requires `matplotlib` (`python -m pip install matplotlib`). Generated artifacts, raw data, and checkpoints are excluded by `.gitignore`.
 
-This project is a research and portfolio demonstration of industrial visual anomaly detection. It is not validated for production quality-control decisions.
+## Repository layout
+
+```text
+.
+├── app.py                         # Original single-image prototype
+├── batch_app.py                   # Original batch prototype
+├── dashboard.py                   # Combined three-category Streamlit application
+├── inspection_history.py          # SQLite inspection history
+├── configs/
+│   ├── metal_nut_split.json
+│   ├── cable_split.json
+│   └── tile_split.json
+├── scripts/
+│   ├── train_patchcore.py         # Metal Nut baseline
+│   ├── train_patchcore_multicategory.py
+│   ├── evaluate_patchcore_multicategory.py
+│   ├── evaluate_localization_multicategory.py
+│   ├── generate_benchmark_charts.py
+│   └── ...                        # Data prep, thresholds, autoencoder, analysis
+├── docs/figures/
+│   ├── detection_auroc.png
+│   ├── localization_overlap.png
+│   └── benchmark_summary.csv
+├── datasets/                      # Ignored: raw and processed datasets
+└── outputs/                       # Ignored: checkpoints, metrics, local SQLite DB
+```
+
+## Limitations and next steps
+
+- **Segmentation quality:** masks can oversegment normal regions or miss thin/low-contrast defects, especially Tile cracks and Cable insulation changes.
+- **Evaluation scope:** one benchmark with limited healthy validation data; no independent real-world factory-camera evaluation or statistical confidence intervals.
+- **Performance:** dashboard timing includes preparation and checkpoint loading; this is **not** a measurement of steady-state/warm-model latency.
+- **Reproducibility / deployment:** checkpoint distribution, automated integration tests, CPU setup, Docker packaging, and a full end-to-end reproducibility check remain future work.
+- **Portfolio presentation:** add real dashboard screenshots, qualitative failure-case comparisons, and a short demo video.
+
+## Intended use
+
+For research, learning, and demonstration of industrial visual anomaly detection. **Do not use predictions as the sole basis for production quality-control decisions without independent validation and human oversight.**
