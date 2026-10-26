@@ -4,7 +4,8 @@
 
 **Categories:** Metal Nut · Cable · Tile  
 **Benchmark:** MVTec AD · **382 held-out test images** across the three categories  
-**Application:** Single-image inspection · Batch inspection · Category selection · Persistent inspection history
+**Application:** Single-image inspection · Batch inspection · Category selection · Persistent inspection history  
+**Quality checks:** 7 automated SQLite-history unit tests · GitHub Actions on push / pull request
 
 > **Research / portfolio demonstration.** Not validated for deployment in production quality-control systems.
 
@@ -63,7 +64,19 @@ This reads the JSON evaluation artifacts from `outputs/` and creates `docs/figur
 - **Tile:** The model detects all 17 crack test images at the image level, yet thin cracks are among its worst cases for mask IoU. `gray_stroke` has 62.50% image-level recall.
 - **Threshold calibration has limitations.** The 99th-percentile healthy-validation pixel threshold gives about 1% exceedance on validation pixels by construction, **not** a guaranteed 1% test pixel FPR. Tile's observed test pixel FPR is 10.66%.
 
-We preserve these frozen-threshold results as the benchmark baseline rather than retuning on evaluated test samples. Results are category-specific and do not establish performance on live factory camera feeds.
+We preserve these frozen-threshold results as the **original benchmark baseline**. Later experiments inspected the test data, so their optimized results must not be presented as independent benchmark scores. Results are category-specific and do not establish performance on live factory camera feeds.
+
+### Exploratory mask-refinement research (not independent test validation)
+
+After publishing the frozen-threshold baseline, we investigated mask over-segmentation by varying pixel thresholds, Gaussian smoothing, morphological filtering, and crack-specific centerline extraction.
+
+| Category / approach | Original micro IoU | Exploratory micro IoU | Interpretation |
+|---|---:|---:|---|
+| Cable: threshold + smoothing + region filtering | 0.3902 | 0.4315 | Reduced false positives, with lower pixel recall |
+| Tile: broad-mask refinement | 0.3690 | 0.3864 | Modest improvement; some classes worsened |
+| Tile: automatic coverage-based crack routing | 0.3690 | 0.4802 | Larger IoU gain, but pixel recall fell from 88.8% to 69.4% |
+
+**Important:** These settings and routing rules were investigated using the already-examined MVTec test images. The automatic Tile router is an exploratory prototype, not a validated generalization result, and is **not enabled in the default dashboard**. The original checkpoint and threshold files remain the baseline.
 
 ## Data and experimental protocol
 
@@ -116,9 +129,26 @@ Open `http://localhost:8501` and choose a product category before uploading imag
 
 > The trained checkpoints (`model.ckpt`) and threshold JSON files are not committed to Git. A fresh clone **cannot run inference immediately**; recreate the models using the scripts below or supply your own compatible trained artifacts.
 
+## Automated tests and CI
+
+Run the lightweight SQLite inspection-history tests independently of models and datasets:
+
+```powershell
+python -m pip install pytest==9.1.1
+python -m pytest -v
+```
+
+`pytest.ini` uses a project-local temporary folder, avoiding Windows Temp directory permission problems. The **7 tests** cover database creation, save/retrieve behavior, batch ordering, SHA-256 metadata, and invalid input handling. GitHub Actions (`.github/workflows/tests.yml`) runs these unit tests on each push and pull request. This is **not** a full inference integration test.
+
+## Performance notes
+
+The Streamlit dashboard reports elapsed time for its **end-to-end inspection pipeline**, including image decoding and preparation, checkpoint loading, prediction, and other overhead. Throughput from that measurement is **not** the same as steady-state GPU model latency.
+
+For example, one **local exploratory** Tile GPU batch processed 20 images in **3.044 s** (approximately **6.57 images/s**, or **152.2 ms/image amortized**) on an RTX 3050 Laptop GPU. This is an example measurement, **not** a controlled benchmark or single-image latency claim; run-to-run variation and device differences can be substantial.
+
 ## Reproducing the experiments
 
-Developed with **Python 3.12**, an **NVIDIA RTX 3050 Laptop GPU**, CUDA-enabled PyTorch, and Anomalib. The pinned `requirements.txt` targets the recorded CUDA 12.8 environment; different hardware may require a different PyTorch installation.
+Developed with **Python 3.12**, an **NVIDIA RTX 3050 Laptop GPU**, CUDA-enabled PyTorch, and Anomalib. The pinned `requirements.txt` targets the recorded **CUDA 12.8** environment. It is **not a universal CPU-only installation**; users with different hardware must select an appropriate PyTorch build and verify compatibility. No CPU-only end-to-end reproduction is claimed.
 
 ```powershell
 # From the project root (Windows PowerShell)
@@ -145,12 +175,15 @@ python scripts/evaluate_localization_multicategory.py --category cable
 
 Repeat the last five commands with `--category tile`. For **Metal Nut**, use the existing `create_split.py`, `prepare_data.py`, `train_patchcore.py`, `calibrate_threshold.py`, `calibrate_pixel_threshold.py`, `evaluate_patchcore.py`, `evaluate_localization.py`, and `evaluate_masks.py` scripts. Run scripts from the repository root.
 
-Chart generation additionally requires `matplotlib` (`python -m pip install matplotlib`). Generated artifacts, raw data, and checkpoints are excluded by `.gitignore`.
+Chart generation additionally requires `matplotlib` (`python -m pip install matplotlib`). The committed charts and `docs/figures/benchmark_summary.csv` remain visible without local model artifacts; regenerating them needs the JSON evaluation outputs. Generated runtime artifacts, raw data, and checkpoints are excluded by `.gitignore`.
 
 ## Repository layout
 
 ```text
 .
+├── .github/workflows/tests.yml    # Lightweight unit-test CI
+├── pytest.ini                     # pytest configuration
+├── tests/test_inspection_history.py # Offline SQLite-history tests
 ├── app.py                         # Original single-image prototype
 ├── batch_app.py                   # Original batch prototype
 ├── dashboard.py                   # Combined three-category Streamlit application
@@ -179,8 +212,9 @@ Chart generation additionally requires `matplotlib` (`python -m pip install matp
 - **Segmentation quality:** masks can oversegment normal regions or miss thin/low-contrast defects, especially Tile cracks and Cable insulation changes.
 - **Evaluation scope:** one benchmark with limited healthy validation data; no independent real-world factory-camera evaluation or statistical confidence intervals.
 - **Performance:** dashboard timing includes preparation and checkpoint loading; this is **not** a measurement of steady-state/warm-model latency.
-- **Reproducibility / deployment:** checkpoint distribution, automated integration tests, CPU setup, Docker packaging, and a full end-to-end reproducibility check remain future work.
-- **Portfolio presentation:** add real dashboard screenshots, qualitative failure-case comparisons, and a short demo video.
+- **Reproducibility:** the pinned environment is CUDA-specific; checkpoints and MVTec data are not bundled. A fresh clone requires local dataset download, training/calibration, and model artifacts to run inference.
+- **Test coverage:** 7 passing unit tests cover inspection history; model inference, Streamlit interactions, and cross-platform installs are not covered by CI.
+- **Research generalization:** mask-refinement and crack-routing gains were test-set-informed exploratory studies, not replacement benchmark scores. Further validation requires a genuinely separate evaluation set.
 
 ## Intended use
 
