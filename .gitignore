@@ -32,3 +32,5 @@ Thumbs.db
 # Local environment secrets
 .env
 .env.*
+.pytest_temp/
+.pytest_cache/
